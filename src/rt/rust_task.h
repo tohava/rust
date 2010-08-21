@@ -21,12 +21,17 @@ rust_task : public maybe_proxy<rust_task>,
     rust_crate_cache *cache;
 
     // Fields known only to the runtime.
+    const char *const name;
     ptr_vec<rust_task> *state;
     rust_cond *cond;
+    const char *cond_name;
     rust_task *supervisor;     // Parent-link for failure propagation.
     size_t idx;
     size_t gc_alloc_thresh;
     size_t gc_alloc_accum;
+
+    // Keeps track of the last time this task yielded.
+    timer yield_timer;
 
     // Rendezvous pointer for receiving data when blocked on a port. If we're
     // trying to read data and no data is available on any incoming channel,
@@ -41,8 +46,10 @@ rust_task : public maybe_proxy<rust_task>,
 
     rust_alarm alarm;
 
+    // Only a pointer to 'name' is kept, so it must live as long as this task.
     rust_task(rust_dom *dom,
-              rust_task *spawner);
+              rust_task *spawner,
+              const char *name);
     ~rust_task();
 
     void start(uintptr_t exit_task_glue,
@@ -64,7 +71,7 @@ rust_task : public maybe_proxy<rust_task>,
     const char *state_str();
     void transition(ptr_vec<rust_task> *svec, ptr_vec<rust_task> *dvec);
 
-    void block(rust_cond *on);
+    void block(rust_cond *on, const char* name);
     void wakeup(rust_cond *from);
     void die();
     void unblock();
@@ -84,6 +91,9 @@ rust_task : public maybe_proxy<rust_task>,
 
     // Save callee-saved registers and return to the main loop.
     void yield(size_t nargs);
+
+    // Yields for a specified duration of time.
+    void yield(size_t nargs, size_t time_in_ms);
 
     // Fail this task (assuming caller-on-stack is different task).
     void kill();

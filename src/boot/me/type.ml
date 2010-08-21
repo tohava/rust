@@ -101,11 +101,11 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
     if not (is_integer (fundamental_ty actual)) then
       type_error "integer" actual
   in
-  let demand_bool_or_char_or_integer (actual:Ast.ty) : unit =
+  let demand_bool_or_char_or_integer_or_native (actual:Ast.ty) : unit =
     match fundamental_ty actual with
-        Ast.TY_bool | Ast.TY_char -> ()
+        Ast.TY_bool | Ast.TY_char | Ast.TY_native _ -> ()
       | ty when is_integer ty -> ()
-      | _ -> type_error "bool, char, or integer" actual
+      | _ -> type_error "bool, char, integer or native" actual
   in
   let demand_number (actual:Ast.ty) : unit =
     match fundamental_ty actual with
@@ -634,9 +634,11 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
           ty
       | Ast.EXPR_unary (Ast.UNOP_cast dst_ty_id, atom) ->
           (* TODO: probably we want to handle more cases here *)
-          demand_bool_or_char_or_integer (check_atom atom);
-          let dst_ty = dst_ty_id.Common.node in
-          demand_bool_or_char_or_integer dst_ty;
+          demand_bool_or_char_or_integer_or_native (check_atom atom);
+          let dst_ty =
+            Hashtbl.find cx.Semant.ctxt_all_cast_types dst_ty_id.Common.id
+          in
+          demand_bool_or_char_or_integer_or_native dst_ty;
           dst_ty
   in
 
@@ -692,7 +694,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
     and check_stmt (stmt:Ast.stmt) : unit =
       check_ret stmt;
       match stmt.Common.node with
-          Ast.STMT_spawn (dst, _, callee, args) ->
+          Ast.STMT_spawn (dst, _, _, callee, args) ->
             infer_lval Ast.TY_task dst;
             demand Ast.TY_nil (check_fn callee args)
 
@@ -760,6 +762,27 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
 
         | Ast.STMT_copy (dst, src) ->
             infer_lval (check_expr src) dst
+
+        | Ast.STMT_copy_binop (dst, Ast.BINOP_add, src) ->
+            begin
+            let src_ty = check_atom ~deref:true src in
+            let dst_ty = check_lval dst in
+              match fundamental_ty dst_ty, fundamental_ty src_ty with
+                  Ast.TY_vec elt1, Ast.TY_vec elt2
+                | Ast.TY_vec elt1, elt2 ->
+                    if elt1 = elt2
+                    then ()
+                    else
+                      Common.err None
+                        "mismatched types in vec-append: %a += %a"
+                        Ast.sprintf_ty dst_ty
+                        Ast.sprintf_ty src_ty
+                | Ast.TY_str, (Ast.TY_mach Common.TY_u8)
+                | Ast.TY_str, Ast.TY_str -> ()
+                | _ ->
+                    infer_lval src_ty dst;
+                    demand src_ty (check_binop Ast.BINOP_add src_ty)
+            end
 
         | Ast.STMT_copy_binop (dst, binop, src) ->
             let ty = check_atom ~deref:true src in

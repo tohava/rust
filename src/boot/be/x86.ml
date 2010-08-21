@@ -303,7 +303,7 @@ let emit_target_specific
                   let dst_eax = hr_like_cell eax dst in
                   let lhs_eax = hr_like_op eax lhs in
                   let rhs_ecx = hr_like_op ecx rhs in
-                    (* Horrible: we bounce complex mul inputs off spill slots
+                    (* Horrible: we bounce mul/div/mod inputs off spill slots
                      * to ensure non-interference between the temporaries used
                      * during mem-base-reg reloads and the registers we're
                      * preparing.  *)
@@ -311,32 +311,26 @@ let emit_target_specific
                     Il.Mem (Il.next_spill_slot e
                               (Il.ScalarTy (Il.operand_scalar_ty op)))
                   in
-                  let is_mem op =
-                    match op with
-                        Il.Cell (Il.Mem _) -> true
+                  let is_eax cell =
+                    match cell with
+                        Il.Cell (Il.Reg (Il.Hreg hr, _)) -> hr = eax
                       | _ -> false
-                  in
-                  let bounce_lhs = is_mem lhs in
-                  let bounce_rhs = is_mem rhs in
-                  let lhs_spill = next_spill_like lhs in
-                  let rhs_spill = next_spill_like rhs in
+                  in                    
+                    if is_eax lhs
+                    then
+                      mov rhs_ecx rhs
+                    else
+                      begin
+                        let lhs_spill = next_spill_like lhs in
+                        let rhs_spill = next_spill_like rhs in
 
-                    if bounce_lhs
-                    then mov lhs_spill lhs;
+                          mov lhs_spill lhs;
+                          mov rhs_spill rhs;
 
-                    if bounce_rhs
-                    then mov rhs_spill rhs;
+                          mov lhs_eax (Il.Cell lhs_spill);
+                          mov rhs_ecx (Il.Cell rhs_spill);
+                      end;
 
-                    mov lhs_eax
-                      (if bounce_lhs
-                       then (Il.Cell lhs_spill)
-                       else lhs);
-
-                    mov rhs_ecx
-                      (if bounce_rhs
-                       then (Il.Cell rhs_spill)
-                       else rhs);
-                    
                     put (Il.Binary
                            { b with
                                Il.binary_lhs = (Il.Cell lhs_eax);
@@ -344,7 +338,7 @@ let emit_target_specific
                                Il.binary_dst = dst_eax; });
                     if dst <> dst_eax
                     then mov dst (Il.Cell dst_eax);
-                    
+
               | _ when (Il.Cell dst) <> lhs ->
                   mov dst lhs;
                   put (Il.Binary
@@ -593,6 +587,7 @@ let restore_frame_base (e:Il.emitter) (base:Il.reg) (retpc:Il.reg) : unit =
  *
  *   *ebp+20+(4*N) = [argN   ]
  *   ...
+ *   *ebp+28       = [arg2   ] = obj/closure ptr
  *   *ebp+24       = [arg1   ] = task ptr
  *   *ebp+20       = [arg0   ] = out ptr
  *   *ebp+16       = [retpc  ]
@@ -1033,7 +1028,7 @@ let unwind_glue
 
 
 (* Puts result in eax; clobbers ecx, edx in the process. *)
-let rec calculate_sz (e:Il.emitter) (size:size) : unit =
+let rec calculate_sz (e:Il.emitter) (size:size) (in_obj:bool) : unit =
   let emit = Il.emit e in
   let mov dst src = emit (Il.umov dst src) in
   let push x = emit (Il.Push x) in
@@ -1045,11 +1040,48 @@ let rec calculate_sz (e:Il.emitter) (size:size) : unit =
   let mul x y = emit (Il.binary Il.UMUL (rc x) (ro x) (ro y)) in
   let subi x y = emit (Il.binary Il.SUB (rc x) (ro x) (immi y)) in
   let eax_gets_a_and_ecx_gets_b a b =
-    calculate_sz e b;
+    calculate_sz e b in_obj;
     push (ro eax);
-    calculate_sz e a;
+    calculate_sz e a in_obj;
     pop (rc ecx);
   in
+
+  let ty_param_n_in_obj_fn i =
+    (*
+     * Here we are trying to immitate the obj-fn branch of
+     * Trans.get_ty_params_of_current_frame while using
+     * eax as our only register.
+     *)
+
+    (* Bind all the referent types we'll need... *)
+
+    let obj_body_rty = Semant.obj_closure_rty word_bits in
+    let tydesc_rty = Semant.tydesc_rty word_bits in
+    (* Note that we cheat here and pretend only to have i+1 tydescs (because
+       we GEP to the i'th while still in this function, so no one outside
+       finds out about the lie. *)
+    let tydesc_tys = Array.init (i + 1) (fun _ -> Ast.TY_type) in
+    let ty_params_ty = Ast.TY_tup tydesc_tys in
+    let ty_params_rty = Semant.referent_type word_bits ty_params_ty in
+
+      (* ... and fetch! *)
+
+      mov (rc eax) (Il.Cell closure_ptr);
+      let obj_body = word_n (h eax) Abi.box_rc_field_body in
+      let obj_body = Il.ptr_cast obj_body obj_body_rty in
+      let tydesc_ptr = get_element_ptr obj_body Abi.obj_body_elt_tydesc in
+
+        mov (rc eax) (Il.Cell tydesc_ptr);
+        let tydesc = Il.ptr_cast (word_at (h eax)) tydesc_rty in
+        let ty_params_ptr =
+          get_element_ptr tydesc Abi.tydesc_field_first_param
+        in
+
+          mov (rc eax) (Il.Cell ty_params_ptr);
+          let ty_params = Il.ptr_cast (word_at (h eax)) ty_params_rty in
+            get_element_ptr ty_params i
+  in
+
     match size with
         SIZE_fixed i ->
           mov (rc eax) (immi i)
@@ -1061,15 +1093,23 @@ let rec calculate_sz (e:Il.emitter) (size:size) : unit =
           mov (rc eax) (imm (Asm.M_POS f))
 
       | SIZE_param_size i ->
-          mov (rc eax) (Il.Cell (ty_param_n i));
+          if in_obj
+          then
+            mov (rc eax) (Il.Cell (ty_param_n_in_obj_fn i))
+          else
+            mov (rc eax) (Il.Cell (ty_param_n i));
           mov (rc eax) (Il.Cell (word_n (h eax) Abi.tydesc_field_size))
 
       | SIZE_param_align i ->
-          mov (rc eax) (Il.Cell (ty_param_n i));
+          if in_obj
+          then
+            mov (rc eax) (Il.Cell (ty_param_n_in_obj_fn i))
+          else
+            mov (rc eax) (Il.Cell (ty_param_n i));
           mov (rc eax) (Il.Cell (word_n (h eax) Abi.tydesc_field_align))
 
       | SIZE_rt_neg a ->
-          calculate_sz e a;
+          calculate_sz e a in_obj;
           neg eax
 
       | SIZE_rt_add (a, b) ->
@@ -1185,6 +1225,7 @@ let fn_prologue
     (callsz:size)
     (nabi:nabi)
     (grow_task_fixup:fixup)
+    (is_obj_fn:bool)
     : unit =
 
   let esi_n = word_n (h esi) in
@@ -1314,7 +1355,7 @@ let fn_prologue
                     emit (Il.jmp Il.JA Il.CodeNone);
 
                     (* Calculate dynamic frame size. *)
-                    calculate_sz e call_and_frame_sz;
+                    calculate_sz e call_and_frame_sz is_obj_fn;
                     ((ro eax), Some primordial_underflow_jmp_pc)
               end
           | Some e -> ((imm e), None)

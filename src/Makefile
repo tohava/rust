@@ -35,7 +35,7 @@ ifeq ($(CFG_OSTYPE), Linux)
   CFG_RUNTIME := librustrt.so
   CFG_STDLIB := libstd.so
   CFG_GCC_CFLAGS += -fPIC
-  CFG_GCC_LINK_FLAGS += -shared -fPIC -ldl -lpthread
+  CFG_GCC_LINK_FLAGS += -shared -fPIC -ldl -lpthread -lrt
   ifeq ($(CFG_CPUTYPE), x86_64)
     CFG_GCC_CFLAGS += -m32
     CFG_GCC_LINK_FLAGS += -m32
@@ -245,7 +245,9 @@ BOOT_CMXS := $(BOOT_MLS:.ml=.cmx)
 BOOT_OBJS := $(BOOT_MLS:.ml=.o)
 BOOT_CMIS := $(BOOT_MLS:.ml=.cmi)
 
-RUNTIME_CS := rt/sync/spin_lock.cpp \
+RUNTIME_CS := rt/sync/timer.cpp \
+              rt/sync/sync.cpp \
+              rt/sync/spin_lock.cpp \
               rt/sync/lock_free_queue.cpp \
               rt/sync/condition_variable.cpp \
               rt/rust.cpp \
@@ -263,7 +265,9 @@ RUNTIME_CS := rt/sync/spin_lock.cpp \
               rt/rust_message.cpp \
               rt/rust_timer.cpp \
               rt/circular_buffer.cpp \
-              rt/isaac/randport.cpp
+              rt/isaac/randport.cpp \
+              rt/rust_srv.cpp \
+              rt/memory_region.cpp
 
 RUNTIME_HDR := rt/globals.h \
                rt/rust.h \
@@ -279,7 +283,12 @@ RUNTIME_HDR := rt/globals.h \
                rt/rust_message.h \
                rt/circular_buffer.h \
                rt/util/array_list.h \
-               rt/util/hash_map.h
+               rt/util/hash_map.h \
+               rt/sync/sync.h \
+               rt/sync/timer.h \
+               rt/rust_srv.h \
+               rt/memory_region.h \
+               rt/memory.h
 
 RUNTIME_INCS := -Irt/isaac -Irt/uthash
 RUNTIME_OBJS := $(RUNTIME_CS:.cpp=$(CFG_OBJ_SUFFIX))
@@ -296,7 +305,7 @@ all: $(CFG_COMPILER) $(MKFILES) $(GENERATED)
 
 boot/util/version.ml: Makefile
 	$(CFG_QUIET)git log -1 \
-      --format='let version = "prerelease (%h %ci)";;' >$@
+      --format='let version = "prerelease (%h %ci)";;' >$@ || exit 1
 
 loc:
 	$(CFG_QUIET)wc -l $(BOOT_MLS) $(RUNTIME_CS) $(RUNTIME_HDR)
@@ -380,13 +389,14 @@ TASK_XFAILS := test/run-pass/acyclic-unwind.rs \
                test/run-pass/task-comm-7.rs \
                test/run-pass/task-comm-8.rs \
                test/run-pass/task-comm-9.rs \
+               test/run-pass/task-comm-10.rs \
+               test/run-pass/task-comm-11.rs \
+               test/run-pass/task-life-0.rs \
                test/run-pass/task-comm.rs \
                test/run-pass/threads.rs \
                test/run-pass/yield.rs
 
 TEST_XFAILS_X86 :=  $(TASK_XFAILS) \
-                    test/run-pass/arithmetic-interference.rs \
-                    test/run-pass/bind-obj-ctor.rs \
                     test/run-pass/child-outlives-parent.rs \
                     test/run-pass/clone-with-exterior.rs \
                     test/run-pass/constrained-type.rs \
@@ -398,16 +408,13 @@ TEST_XFAILS_X86 :=  $(TASK_XFAILS) \
                     test/run-pass/generic-recursive-tag.rs \
                     test/run-pass/int-lib.rs \
                     test/run-pass/iter-ret.rs \
-                    test/run-pass/lib-deque.rs \
+                    test/run-pass/lib-io.rs \
                     test/run-pass/lib-map.rs \
                     test/run-pass/mlist-cycle.rs \
                     test/run-pass/obj-as.rs \
                     test/run-pass/task-comm.rs \
                     test/run-pass/vec-slice.rs \
-                    test/run-pass/task-comm-2.rs \
                     test/run-pass/task-comm-3.rs \
-                    test/run-pass/task-comm-5.rs \
-                    test/run-pass/task-comm-6.rs \
                     test/compile-fail/bad-recv.rs \
                     test/compile-fail/bad-send.rs \
                     test/compile-fail/infinite-tag-type-recursion.rs \
@@ -416,14 +423,17 @@ TEST_XFAILS_X86 :=  $(TASK_XFAILS) \
 
 TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                     $(addprefix test/run-pass/, \
+                      arith-1.rs \
                       acyclic-unwind.rs \
                       alt-pattern-simple.rs \
                       alt-tag.rs \
-                      arithmetic-interference.rs \
+                      append-units.rs \
                       argv.rs \
                       autoderef-full-lval.rs \
                       autoderef-objfn.rs \
                       basic.rs \
+                      basic-1.rs \
+                      basic-2.rs \
                       bind-obj-ctor.rs \
                       bind-thunk.rs \
                       bind-trivial.rs \
@@ -464,7 +474,6 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       i32-sub.rs \
                       i8-incr.rs \
                       import.rs \
-                      inner-module.rs \
                       integral-indexing.rs \
                       int-lib.rs \
                       iter-range.rs \
@@ -474,8 +483,10 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       lazy-init.rs \
                       lazychan.rs \
                       lib-deque.rs \
+                      lib-io.rs \
                       lib-map.rs \
                       lib-rand.rs \
+                      lib-vec-str-conversions.rs \
                       linear-for-loop.rs \
                       list.rs \
                       many.rs \
@@ -500,6 +511,7 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       rec-tup.rs \
                       rec.rs \
                       simple-obj.rs \
+                      size-and-align.rs \
                       spawn-fn.rs \
                       spawn-module-qualified.rs \
                       spawn.rs \
@@ -508,6 +520,7 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       str-concat.rs \
                       str-idx.rs \
                       str-lib.rs \
+                      task-lib.rs \
                       tag.rs \
                       tail-cps.rs \
                       tail-direct.rs \
@@ -522,6 +535,9 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       task-comm-7.rs \
                       task-comm-8.rs \
                       task-comm-9.rs \
+                      task-comm-10.rs \
+                      task-comm-11.rs \
+                      task-life-0.rs \
                       threads.rs \
                       type-sizes.rs \
                       u8-incr.rs \
@@ -541,6 +557,7 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       vec-lib.rs \
                       vec-slice.rs \
                       vec.rs \
+                      while-flow-graph.rs \
                       writealias.rs \
                       yield.rs \
                       yield2.rs \
@@ -602,6 +619,10 @@ TEST_RPASS_OUTS_X86  := \
                     $(TEST_RPASS_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86.out)
 TEST_RPASS_OUTS_LLVM := \
                     $(TEST_RPASS_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm.out)
+TEST_RPASS_TMPS_X86  := \
+    $(TEST_RPASS_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86$(CFG_EXE_SUFFIX).tmp)
+TEST_RPASS_TMPS_LLVM := \
+    $(TEST_RPASS_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm$(CFG_EXE_SUFFIX).tmp)
 
 
 TEST_RFAIL_CRATES_X86 := $(filter-out $(TEST_XFAILS_X86), $(RFAIL_RC))
@@ -619,6 +640,10 @@ TEST_RFAIL_OUTS_X86  := \
                     $(TEST_RFAIL_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86.out)
 TEST_RFAIL_OUTS_LLVM := \
                     $(TEST_RFAIL_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm.out)
+TEST_RFAIL_TMPS_X86  := \
+    $(TEST_RFAIL_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86$(CFG_EXE_SUFFIX).tmp)
+TEST_RFAIL_TMPS_LLVM := \
+    $(TEST_RFAIL_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm$(CFG_EXE_SUFFIX).tmp)
 
 
 TEST_CFAIL_CRATES_X86 := $(filter-out $(TEST_XFAILS_X86), $(CFAIL_RC))
@@ -636,6 +661,11 @@ TEST_CFAIL_OUTS_X86 := \
                 $(TEST_CFAIL_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86.out)
 TEST_CFAIL_OUTS_LLVM := \
                 $(TEST_CFAIL_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm.out)
+TEST_CFAIL_TMPS_X86 := \
+    $(TEST_CFAIL_EXES_X86:.x86$(CFG_EXE_SUFFIX)=.x86$(CFG_EXE_SUFFIX).tmp)
+TEST_CFAIL_TMPS_LLVM := \
+    $(TEST_CFAIL_EXES_LLVM:.llvm$(CFG_EXE_SUFFIX)=.llvm$(CFG_EXE_SUFFIX).tmp)
+
 
 ALL_TEST_CRATES := $(TEST_CFAIL_CRATES_X86) \
                    $(TEST_RFAIL_CRATES_X86) \
@@ -690,10 +720,12 @@ BOOT := $(CFG_QUIET)OCAMLRUNPARAM="b1" $(CFG_BOOT) $(CFG_BOOT_FLAGS)
 	$(CFG_QUIET)mv $< $@
 
 test/run-pass/%.out.tmp: test/run-pass/%$(CFG_EXE_SUFFIX) $(CFG_RUNTIME)
+	$(CFG_QUIET)rm -f $<.tmp
 	@$(call CFG_ECHO, run: $<)
 	$(CFG_QUIET)$(call CFG_RUN_TARG, $<) > $@
 
 test/run-fail/%.out.tmp: test/run-fail/%$(CFG_EXE_SUFFIX) $(CFG_RUNTIME)
+	$(CFG_QUIET)rm -f $<.tmp
 	@$(call CFG_ECHO, run: $<)
 	$(CFG_QUIET)rm -f $@
 	$(CFG_QUIET)$(call CFG_RUN_TARG, $<) >$@ 2>&1 ; X=$$? ; \
@@ -886,12 +918,18 @@ clean:
 	$(CFG_QUIET)rm -f $(ML_DEPFILES) $(C_DEPFILES) $(CRATE_DEPFILES)
 	$(CFG_QUIET)rm -f $(GENERATED)
 	$(CFG_QUIET)rm -f $(CFG_BOOT) $(CFG_RUNTIME) $(CFG_STDLIB)
-	$(CFG_QUIET)rm -f $(TEST_RPASS_EXES_X86) $(TEST_RPASS_OUTS_X86)
-	$(CFG_QUIET)rm -f $(TEST_RPASS_EXES_LLVM) $(TEST_RPASS_OUTS_LLVM)
-	$(CFG_QUIET)rm -f $(TEST_RFAIL_EXES_X86) $(TEST_RFAIL_OUTS_X86)
-	$(CFG_QUIET)rm -f $(TEST_RFAIL_EXES_LLVM) $(TEST_RFAIL_OUTS_LLVM)
-	$(CFG_QUIET)rm -f $(TEST_CFAIL_EXES_X86) $(TEST_CFAIL_OUTS_X86)
-	$(CFG_QUIET)rm -f $(TEST_CFAIL_EXES_LLVM) $(TEST_CFAIL_OUTS_LLVM)
+	$(CFG_QUIET)rm -f $(TEST_RPASS_EXES_X86) $(TEST_RPASS_OUTS_X86) \
+                          $(TEST_RPASS_TMPS_X86)
+	$(CFG_QUIET)rm -f $(TEST_RPASS_EXES_LLVM) $(TEST_RPASS_OUTS_LLVM) \
+                          $(TEST_RPASS_TMPS_LLVM)
+	$(CFG_QUIET)rm -f $(TEST_RFAIL_EXES_X86) $(TEST_RFAIL_OUTS_X86) \
+                          $(TEST_RFAIL_TMPS_X86)
+	$(CFG_QUIET)rm -f $(TEST_RFAIL_EXES_LLVM) $(TEST_RFAIL_OUTS_LLVM) \
+                          $(TEST_RFAIL_TMPS_LLVM)
+	$(CFG_QUIET)rm -f $(TEST_CFAIL_EXES_X86) $(TEST_CFAIL_OUTS_X86) \
+                          $(TEST_CFAIL_TMPS_X86)
+	$(CFG_QUIET)rm -f $(TEST_CFAIL_EXES_LLVM) $(TEST_CFAIL_OUTS_LLVM) \
+                          $(TEST_CFAIL_TMPS_LLVM)
 	$(CFG_QUIET)rm -rf $(TEST_RPASS_EXES_LLVM:.llvm=.llvm.dSYM)
 	$(CFG_QUIET)rm -rf $(TEST_RFAIL_EXES_LLVM:.llvm=.llvm.dSYM)
 	$(CFG_QUIET)rm -Rf $(PKG_NAME)-*.tar.gz dist

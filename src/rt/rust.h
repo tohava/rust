@@ -19,26 +19,7 @@
 
 #include "util/array_list.h"
 
-struct rust_srv {
-    size_t live_allocs;
-    array_list<void *> allocation_list;
-
-    virtual void log(char const *);
-    virtual void fatal(char const *, char const *, size_t);
-    virtual void warning(char const *, char const *, size_t);
-    virtual void *malloc(size_t);
-    virtual void *realloc(void *, size_t);
-    virtual void free(void *);
-    virtual rust_srv *clone();
-
-    rust_srv();
-    virtual ~rust_srv();
-};
-
-inline void *operator new(size_t size, rust_srv *srv)
-{
-    return srv->malloc(size);
-}
+#include "rust_srv.h"
 
 /*
  * Local Variables:

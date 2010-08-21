@@ -1677,7 +1677,7 @@ let dwarf_visitor
       in
 
       let record trec =
-        let rty = referent_type abi (Ast.TY_rec trec) in
+        let rty = referent_type word_bits (Ast.TY_rec trec) in
         let rty_sz = Il.referent_ty_size abi.Abi.abi_word_bits in
         let fix = new_fixup "record type DIE" in
         let die = DEF (fix, SEQ [|
@@ -1926,7 +1926,7 @@ let dwarf_visitor
          * I'm a bit surprised by that!
          *)
 
-        let rty = referent_type abi (Ast.TY_tag ttag) in
+        let rty = referent_type word_bits (Ast.TY_tag ttag) in
         let rty_sz = Il.referent_ty_size abi.Abi.abi_word_bits in
         let rtys =
           match rty with
@@ -2176,14 +2176,8 @@ let dwarf_visitor
   in
 
   let addr_ranges (fix:fixup) : frag =
-    let image_is_relocated =
-      match cx.ctxt_sess.Session.sess_targ with
-          Win32_x86_pe ->
-            cx.ctxt_sess.Session.sess_library_mode
-        | _ -> true
-    in
     let lo =
-      if image_is_relocated
+      if cx.ctxt_sess.Session.sess_library_mode
       then image_base_rel fix
       else M_POS fix
     in
@@ -2801,6 +2795,7 @@ let rec extract_meta
     queue_to_arr meta
 ;;
 
+let external_opaques = Hashtbl.create 0;;
 
 let rec extract_mod_items
     (nref:node_id ref)
@@ -2822,7 +2817,6 @@ let rec extract_mod_items
       id
   in
 
-  let external_opaques = Hashtbl.create 0 in
   let get_opaque_of o =
     htab_search_or_add external_opaques o
       (fun _ -> next_opaque_id())

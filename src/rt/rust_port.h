@@ -15,6 +15,8 @@ public:
 
     rust_port(rust_task *task, size_t unit_sz);
     ~rust_port();
+    void log_state();
+    bool receive(void *dptr);
 };
 
 //

@@ -2,6 +2,8 @@
 *.x86
 *.llvm
 *.out
+*.x86.tmp
+*.llvm.tmp
 *.cmx
 *.dll
 *.exe
@@ -30,6 +32,8 @@
 *.swp
 .hg/
 .hgignore
+.cproject
+.project
 lexer.ml
 rustboot
 rustc

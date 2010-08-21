@@ -26,7 +26,10 @@ read_type_bit_mask() {
         bits |= strstr(env_str, "cache") ? rust_log::CACHE : 0;
         bits |= strstr(env_str, "timer") ? rust_log::TIMER : 0;
         bits |= strstr(env_str, "gc") ? rust_log::GC : 0;
+        bits |= strstr(env_str, "stdlib") ? rust_log::STDLIB : 0;
+        bits |= strstr(env_str, "special") ? rust_log::SPECIAL : 0;
         bits |= strstr(env_str, "all") ? rust_log::ALL : 0;
+        bits = strstr(env_str, "none") ? 0 : bits;
     }
     return bits;
 }
@@ -144,13 +147,22 @@ rust_log::trace_ln(rust_task *task, char *message) {
 #if defined(__WIN32__)
     uint32_t thread_id = 0;
 #else
-    uint32_t thread_id = (uint32_t) pthread_self();
+    uint32_t thread_id = hash((uint32_t) pthread_self());
 #endif
     char prefix[1024] = "";
-    append_string(prefix, "0x%08" PRIxPTR ":0x%08" PRIxPTR ":",
-                  thread_id, (uintptr_t) _dom);
+    if (_dom->name) {
+        append_string(prefix, "%04" PRIxPTR ":%.10s:",
+                      thread_id, _dom->name);
+    } else {
+        append_string(prefix, "%04" PRIxPTR ":0x%08" PRIxPTR ":",
+                      thread_id, (uintptr_t) _dom);
+    }
     if (task) {
-        append_string(prefix, "0x%08" PRIxPTR ":", (uintptr_t) task);
+        if (task->name) {
+            append_string(prefix, "%.10s:", task->name);
+        } else {
+            append_string(prefix, "0x%08" PRIxPTR ":", (uintptr_t) task);
+        }
     }
     trace_ln(thread_id, prefix, message);
 }

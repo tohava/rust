@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <inttypes.h>
+#include <stdarg.h>
 
 #include <stdio.h>
 #include <string.h>
@@ -38,19 +39,22 @@ extern "C" {
 #error "Platform not supported."
 #endif
 
+#include "sync/sync.h"
+#include "sync/timer.h"
 #include "sync/condition_variable.h"
 
 #ifndef __i386__
 #error "Target CPU not supported."
 #endif
 
-#define I(dom, e) ((e) ? (void)0 :                             \
-                   (dom)->srv->fatal(#e, __FILE__, __LINE__))
-#define W(dom, e, s) ((e) ? (void)0 :                             \
-                   (dom)->srv->warning(#e " : " #s, __FILE__, __LINE__))
+#define I(dom, e) ((e) ? (void)0 : \
+         (dom)->srv->fatal(#e, __FILE__, __LINE__, ""))
 
-#define A(dom, e, s) ((e) ? (void)0 :                          \
-                      (dom)->srv->fatal(#e " : " #s, __FILE__, __LINE__))
+#define W(dom, e, s, ...) ((e) ? (void)0 : \
+         (dom)->srv->warning(#e, __FILE__, __LINE__, s, ## __VA_ARGS__))
+
+#define A(dom, e, s, ...) ((e) ? (void)0 : \
+         (dom)->srv->fatal(#e, __FILE__, __LINE__, s, ## __VA_ARGS__))
 
 struct rust_task;
 struct rust_port;
@@ -75,7 +79,7 @@ template <typename T>
 struct
 rc_base
 {
-    size_t ref_count;
+    intptr_t ref_count;
 
     void ref() {
         ++ref_count;
@@ -151,6 +155,7 @@ public:
     T *& operator[](size_t offset);
     void push(T *p);
     T *pop();
+    T *peek();
     void trim(size_t fill);
     void swap_delete(T* p);
 };
@@ -161,32 +166,14 @@ template <typename T> inline T
 check_null(rust_dom *dom, T value, char const *expr,
            char const *file, size_t line) {
     if (value == NULL) {
-        dom->srv->fatal(expr, file, line);
+        dom->srv->fatal(expr, file, line, "is null");
     }
     return value;
 }
 
 #define CHECK_NULL(dom, e) (check_null(dom, e, #e, __FILE__, __LINE__))
 
-inline void *operator new(size_t sz, void *mem) {
-    return mem;
-}
-
-inline void *operator new(size_t sz, rust_dom *dom) {
-    return dom->malloc(sz);
-}
-
-inline void *operator new[](size_t sz, rust_dom *dom) {
-    return dom->malloc(sz);
-}
-
-inline void *operator new(size_t sz, rust_dom &dom) {
-    return dom.malloc(sz);
-}
-
-inline void *operator new[](size_t sz, rust_dom &dom) {
-    return dom.malloc(sz);
-}
+#include "memory.h"
 
 struct
 rust_timer

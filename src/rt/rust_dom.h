@@ -25,6 +25,9 @@ struct rust_dom
     rust_crate const *root_crate;
     rust_log _log;
     rust_srv *srv;
+    memory_region local_region;
+    memory_region synchronized_region;
+    const char *const name;
     ptr_vec<rust_task> running_tasks;
     ptr_vec<rust_task> blocked_tasks;
     ptr_vec<rust_task> dead_tasks;
@@ -34,20 +37,19 @@ struct rust_dom
     rust_task *curr_task;
     int rval;
 
-    condition_variable _progress;
-
     hash_map<rust_task *, rust_proxy<rust_task> *> _task_proxies;
     hash_map<rust_port *, rust_proxy<rust_port> *> _port_proxies;
 
     // Incoming messages from other domains.
-    condition_variable _incoming_message_pending;
     lock_free_queue _incoming_message_queue;
 
 #ifndef __WIN32__
     pthread_attr_t attr;
 #endif
 
-    rust_dom(rust_srv *srv, rust_crate const *root_crate);
+    // Only a pointer to 'name' is kept, so it must live as long as this
+    // domain.
+    rust_dom(rust_srv *srv, rust_crate const *root_crate, const char *name);
     ~rust_dom();
 
     void activate(rust_task *task);
@@ -58,10 +60,15 @@ struct rust_dom
     template<typename T>
     void logptr(char const *msg, T* ptrval);
     void fail();
-    void *malloc(size_t sz);
-    void *calloc(size_t sz);
-    void *realloc(void *data, size_t sz);
-    void free(void *p);
+    void *malloc(size_t size);
+    void *malloc(size_t size, memory_region::memory_region_type type);
+    void *calloc(size_t size);
+    void *calloc(size_t size, memory_region::memory_region_type type);
+    void *realloc(void *mem, size_t size);
+    void *realloc(void *mem, size_t size,
+        memory_region::memory_region_type type);
+    void free(void *mem);
+    void free(void *mem, memory_region::memory_region_type type);
 
     void send_message(rust_message *message);
     void drain_incoming_message_queue();
@@ -81,9 +88,11 @@ struct rust_dom
 
     void reap_dead_tasks();
     rust_task *schedule_task();
+    bool is_deadlocked();
     int start_main_loop();
 
     void log_state();
+    static void log_all_state();
 };
 
 //

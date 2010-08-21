@@ -6,7 +6,9 @@
 
 // Stacks
 
-static size_t const min_stk_bytes = 0x300;
+// FIXME (issue #151): This should be 0x300; the change here is for
+// practicality's sake until stack growth is working.
+static size_t const min_stk_bytes = 0x300000;
 
 // Task stack segments. Heap allocated and chained together.
 
@@ -52,7 +54,7 @@ align_down(uintptr_t sp)
 }
 
 
-rust_task::rust_task(rust_dom *dom, rust_task *spawner) :
+rust_task::rust_task(rust_dom *dom, rust_task *spawner, const char *name) :
     maybe_proxy<rust_task>(this),
     stk(new_stk(dom, 0)),
     runtime_sp(0),
@@ -60,8 +62,10 @@ rust_task::rust_task(rust_dom *dom, rust_task *spawner) :
     gc_alloc_chain(0),
     dom(dom),
     cache(NULL),
+    name(name),
     state(&dom->running_tasks),
     cond(NULL),
+    cond_name("none"),
     supervisor(spawner),
     idx(0),
     rendezvous_ptr(0),
@@ -77,8 +81,8 @@ rust_task::rust_task(rust_dom *dom, rust_task *spawner) :
 rust_task::~rust_task()
 {
     dom->log(rust_log::MEM|rust_log::TASK,
-             "~rust_task 0x%" PRIxPTR ", refcnt=%d",
-             (uintptr_t)this, ref_count);
+             "~rust_task %s @0x%" PRIxPTR ", refcnt=%d",
+             name, (uintptr_t)this, ref_count);
 
     /*
       for (uintptr_t fp = get_fp(); fp; fp = get_previous_fp(fp)) {
@@ -198,6 +202,12 @@ rust_task::start(uintptr_t exit_task_glue,
 void
 rust_task::grow(size_t n_frame_bytes)
 {
+    // FIXME (issue #151): Just fail rather than almost certainly crashing
+    // mysteriously later. The commented-out logic below won't work at all in
+    // the presence of non-word-aligned pointers.
+    abort();
+
+#if 0
     stk_seg *old_stk = this->stk;
     uintptr_t old_top = (uintptr_t) old_stk->limit;
     uintptr_t old_bottom = (uintptr_t) &old_stk->data[0];
@@ -252,6 +262,7 @@ rust_task::grow(size_t n_frame_bytes)
              "processed %d relocations", n_relocs);
     del_stk(dom, old_stk);
     dom->logptr("grown stk limit", new_top);
+#endif
 }
 
 void
@@ -308,10 +319,16 @@ rust_task::run_on_resume(uintptr_t glue)
 }
 
 void
-rust_task::yield(size_t nargs)
-{
+rust_task::yield(size_t nargs) {
+    yield(nargs, 0);
+}
+
+void
+rust_task::yield(size_t nargs, size_t time_in_us) {
     log(rust_log::TASK,
-        "task 0x%" PRIxPTR " yielding", this);
+        "task %s @0x%" PRIxPTR " yielding for %d us",
+        name, this, time_in_us);
+    yield_timer.reset(time_in_us);
     run_after_return(nargs, dom->root_crate->get_yield_glue());
 }
 
@@ -323,23 +340,29 @@ get_callee_save_fp(uintptr_t *top_of_callee_saves)
 
 void
 rust_task::kill() {
+    if (dead()) {
+        // Task is already dead, can't kill what's already dead.
+        return;
+    }
+
     // Note the distinction here: kill() is when you're in an upcall
     // from task A and want to force-fail task B, you do B->kill().
     // If you want to fail yourself you do self->fail(upcall_nargs).
-    log(rust_log::TASK, "killing task 0x%" PRIxPTR, this);
+    log(rust_log::TASK, "killing task %s @0x%" PRIxPTR, name, this);
     // Unblock the task so it can unwind.
     unblock();
 
     if (this == dom->root_task)
         dom->fail();
 
+    log(rust_log::TASK, "preparing to unwind task: 0x%" PRIxPTR, this);
     run_on_resume(dom->root_crate->get_unwind_glue());
 }
 
 void
 rust_task::fail(size_t nargs) {
     // See note in ::kill() regarding who should call this.
-    dom->log(rust_log::TASK, "task 0x%" PRIxPTR " failing", this);
+    dom->log(rust_log::TASK, "task %s @0x%" PRIxPTR " failing", name, this);
     // Unblock the task so it can unwind.
     unblock();
     if (this == dom->root_task)
@@ -347,9 +370,9 @@ rust_task::fail(size_t nargs) {
     run_after_return(nargs, dom->root_crate->get_unwind_glue());
     if (supervisor) {
         dom->log(rust_log::TASK,
-                 "task 0x%" PRIxPTR
-                 " propagating failure to supervisor 0x%" PRIxPTR,
-                 this, supervisor);
+                 "task %s @0x%" PRIxPTR
+                 " propagating failure to supervisor %s @0x%" PRIxPTR,
+                 name, this, supervisor->name, supervisor);
         supervisor->kill();
     }
 }
@@ -358,7 +381,7 @@ void
 rust_task::gc(size_t nargs)
 {
     dom->log(rust_log::TASK|rust_log::MEM,
-             "task 0x%" PRIxPTR " garbage collecting", this);
+             "task %s @0x%" PRIxPTR " garbage collecting", name, this);
     run_after_return(nargs, dom->root_crate->get_gc_glue());
 }
 
@@ -366,8 +389,9 @@ void
 rust_task::unsupervise()
 {
     dom->log(rust_log::TASK,
-             "task 0x%" PRIxPTR " disconnecting from supervisor 0x%" PRIxPTR,
-             this, supervisor);
+             "task %s @0x%" PRIxPTR
+             " disconnecting from supervisor %s @0x%" PRIxPTR,
+             name, this, supervisor->name, supervisor);
     supervisor = NULL;
 }
 
@@ -468,8 +492,9 @@ rust_task::malloc(size_t sz, type_desc *td)
     if (td) {
         gc_alloc *gcm = (gc_alloc*) mem;
         dom->log(rust_log::TASK|rust_log::MEM|rust_log::GC,
-                 "task 0x%" PRIxPTR " allocated %d GC bytes = 0x%" PRIxPTR,
-                 (uintptr_t)this, sz, gcm);
+                 "task %s @0x%" PRIxPTR
+                 " allocated %d GC bytes = 0x%" PRIxPTR,
+                 name, (uintptr_t)this, sz, gcm);
         memset((void*) gcm, 0, sizeof(gc_alloc));
         link_gc(gcm);
         gcm->ctrl_word = (uintptr_t)td;
@@ -488,8 +513,9 @@ rust_task::realloc(void *data, size_t sz, bool is_gc)
         sz += sizeof(gc_alloc);
         gcm = (gc_alloc*) dom->realloc((void*)gcm, sz);
         dom->log(rust_log::TASK|rust_log::MEM|rust_log::GC,
-                 "task 0x%" PRIxPTR " reallocated %d GC bytes = 0x%" PRIxPTR,
-                 (uintptr_t)this, sz, gcm);
+                 "task %s @0x%" PRIxPTR
+                 " reallocated %d GC bytes = 0x%" PRIxPTR,
+                 name, (uintptr_t)this, sz, gcm);
         if (!gcm)
             return gcm;
         link_gc(gcm);
@@ -507,21 +533,26 @@ rust_task::free(void *p, bool is_gc)
         gc_alloc *gcm = (gc_alloc*)(((char *)p) - sizeof(gc_alloc));
         unlink_gc(gcm);
         dom->log(rust_log::TASK|rust_log::MEM|rust_log::GC,
-                 "task 0x%" PRIxPTR " freeing GC memory = 0x%" PRIxPTR,
-                 (uintptr_t)this, gcm);
+                 "task %s @0x%" PRIxPTR " freeing GC memory = 0x%" PRIxPTR,
+                 name, (uintptr_t)this, gcm);
         dom->free(gcm);
     } else {
         dom->free(p);
     }
 }
 
+const char *
+rust_task::state_str() {
+    return dom->state_vec_name(state);
+}
 
 void
 rust_task::transition(ptr_vec<rust_task> *src, ptr_vec<rust_task> *dst)
 {
     I(dom, state == src);
     dom->log(rust_log::TASK,
-             "task 0x%" PRIxPTR " state change '%s' -> '%s'",
+             "task %s @0x%" PRIxPTR " state change '%s' -> '%s'",
+             name,
              (uintptr_t)this,
              dom->state_vec_name(src),
              dom->state_vec_name(dst));
@@ -531,7 +562,7 @@ rust_task::transition(ptr_vec<rust_task> *src, ptr_vec<rust_task> *dst)
 }
 
 void
-rust_task::block(rust_cond *on)
+rust_task::block(rust_cond *on, const char* name)
 {
     log(rust_log::TASK, "Blocking on 0x%" PRIxPTR ", cond: 0x%" PRIxPTR,
                          (uintptr_t) on, (uintptr_t) cond);
@@ -540,6 +571,7 @@ rust_task::block(rust_cond *on)
 
     transition(&dom->running_tasks, &dom->blocked_tasks);
     cond = on;
+    cond_name = name;
 }
 
 void
@@ -551,11 +583,9 @@ rust_task::wakeup(rust_cond *from)
     A(dom, cond == from, "Cannot wake up blocked task on wrong condition.");
 
     transition(&dom->blocked_tasks, &dom->running_tasks);
-    // TODO: Signaling every time the task is awaken is kind of silly,
-    // do this a nicer way.
-    dom->_progress.signal();
     I(dom, cond == from);
     cond = NULL;
+    cond_name = "none";
 }
 
 void

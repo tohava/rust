@@ -599,6 +599,7 @@ Unicode characters.
 * Ref.Lex.Ignore::       Ignored characters.
 * Ref.Lex.Ident::        Identifier tokens.
 * Ref.Lex.Key::          Keyword tokens.
+* Ref.Lex.Res::          Reserved tokens.
 * Ref.Lex.Num::          Numeric tokens.
 * Ref.Lex.Text::         String and character tokens.
 * Ref.Lex.Syntax::       Syntactic extension tokens.
@@ -636,7 +637,7 @@ token or a syntactic extension token.  Multi-line comments may be nested.
 Identifiers follow the pattern of C identifiers: they begin with a
 @emph{letter} or @emph{underscore}, and continue with any combination of
 @emph{letters}, @emph{decimal digits} and underscores, and must not be equal
-to any keyword. @xref{Ref.Lex.Key}.
+to any keyword or reserved token. @xref{Ref.Lex.Key}. @xref{Ref.Lex.Res}.
 
 A @emph{letter} is a Unicode character in the ranges U+0061-U+007A and
 U+0041-U+005A (@code{'a'}-@code{'z'} and @code{'A'}-@code{'Z'}).
@@ -728,6 +729,35 @@ The keywords are:
 @tab @code{be}
 @end multitable
 
+@node       Ref.Lex.Res
+@subsection Ref.Lex.Res
+@c * Ref.Lex.Res::                Reserved tokens.
+
+The reserved tokens are:
+@cindex Reserved
+
+@sp 2
+
+@multitable @columnfractions .15 .15 .15 .15 .15
+@item @code{f16}
+@tab @code{f80}
+@tab @code{f128}
+@item @code{m32}
+@tab @code{m64}
+@tab @code{m128}
+@tab @code{dec}
+@end multitable
+
+@sp 2
+
+At present these tokens have no defined meaning in the Rust language.
+
+These tokens may correspond, in some current or future implementation,
+to additional built-in types for decimal floating-point, extended
+binary and interchange floating-point formats, as defined in the IEEE
+754-1985 and IEEE 754-2008 specifications.
+
+
 @node       Ref.Lex.Num
 @subsection Ref.Lex.Num
 @c * Ref.Lex.Num::                 Numeric tokens.
@@ -784,6 +814,10 @@ literal may be followed (immediately, without any spaces) by a
 only two floating-point suffixes: @code{f32} and @code{f64}. Each of these
 gives the floating point literal the associated type, rather than
 @code{float}.
+
+A set of suffixes are also reserved to accommodate literal support for
+types corresponding to reserved tokens. The reserved suffixes are @code{f16},
+@code{f80}, @code{f128}, @code{m}, @code{m32}, @code{m64} and @code{m128}.
 
 @sp 1
 A @dfn{hex digit} is either a @emph{decimal digit} or else a character in the
@@ -2024,7 +2058,7 @@ The signed two's complement word types @code{i8}, @code{i16}, @code{i32} and
 @end ifhtml
  respectively.
 @item
-The IEEE 754 single-precision and double-precision floating-point types:
+The IEEE 754-2008 @code{binary32} and @code{binary64} floating-point types:
 @code{f32} and @code{f64}, respectively.
 @end itemize
 
@@ -2822,12 +2856,15 @@ x.y = z + 2;
 @c * Ref.Stmt.Spawn::               Statements creating new tasks.
 @cindex Spawn statement
 
-A @code{spawn} statement consists of keyword @code{spawn}, followed by a
-normal @emph{call} statement (@pxref{Ref.Stmt.Call}).  A @code{spawn}
-statement causes the runtime to construct a new task executing the called
-function.  The called function is referred to as the @dfn{entry function} for
-the spawned task, and its arguments are copied from the spawning task to the
-spawned task before the spawned task begins execution.
+A @code{spawn} statement consists of keyword @code{spawn}, followed by
+an optional literal string naming the new task and then a normal
+@emph{call} statement (@pxref{Ref.Stmt.Call}).  A @code{spawn}
+statement causes the runtime to construct a new task executing the
+called function with the given name.  The called function is referred
+to as the @dfn{entry function} for the spawned task, and its arguments
+are copied from the spawning task to the spawned task before the
+spawned task begins execution.  If no explicit name is present, the
+task is implicitly named with the string of the call statement.
 
 Functions taking alias-slot arguments, or returning non-nil values, cannot be
 spawned. Iterators cannot be spawned.
@@ -2843,6 +2880,7 @@ fn helper(chan[u8] out) @{
 
 let port[u8] out;
 let task p = spawn helper(chan(out));
+let task p2 = spawn "my_helper" helper(chan(out));
 // let task run, do other things.
 auto result <- out;
 

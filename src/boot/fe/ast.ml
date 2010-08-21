@@ -199,7 +199,7 @@ and tup_input = (mutability * atom)
 and stmt' =
 
   (* lval-assigning stmts. *)
-    STMT_spawn of (lval * domain * lval * (atom array))
+    STMT_spawn of (lval * domain * string * lval * (atom array))
   | STMT_new_rec of (lval * (rec_input array) * lval option)
   | STMT_new_tup of (lval * (tup_input array))
   | STMT_new_vec of (lval * mutability * atom array)
@@ -259,7 +259,7 @@ and stmt_alt_type =
 
 and stmt_alt_port =
     {
-      (* else lval is a timeout value. *)
+      (* else atom is a timeout value. *)
       alt_port_arms: port_arm array;
       alt_port_else: (atom * block) option;
     }
@@ -328,7 +328,7 @@ and type_arm = type_arm' identified
 and port_arm' = port_case * block
 and port_arm = port_arm' identified
 
-and port_case = 
+and port_case =
     PORT_CASE_send of (lval * lval)
   | PORT_CASE_recv of (lval * lval)
 
@@ -664,7 +664,7 @@ and fmt_constrained ff (ty, constrs) : unit =
   fmt_constrs ff constrs;
   fmt ff "@]";
   fmt ff "@]";
-    
+
 
 and fmt_ty (ff:Format.formatter) (t:ty) : unit =
   match t with
@@ -707,7 +707,7 @@ and fmt_ty (ff:Format.formatter) (t:ty) : unit =
   | TY_tag ttag -> fmt_tag ff ttag
   | TY_iso tiso -> fmt_iso ff tiso
   | TY_idx idx -> fmt ff "<idx#%d>" idx
-  | TY_constrained ctrd -> fmt_constrained ff ctrd 
+  | TY_constrained ctrd -> fmt_constrained ff ctrd
 
   | TY_obj (effect, fns) ->
       fmt_obox ff;
@@ -942,10 +942,11 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
             fmt ff ";"
           end
 
-      | STMT_spawn (dst, domain, fn, args) ->
+      | STMT_spawn (dst, domain, name, fn, args) ->
           fmt_lval ff dst;
           fmt ff " = spawn ";
           fmt_domain ff domain;
+          fmt_str ff ("\"" ^ name ^ "\"");
           fmt_lval ff fn;
           fmt_atoms ff args;
           fmt ff ";";
@@ -1233,7 +1234,7 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
           Array.iter (fmt_tag_arm ff) at.alt_tag_arms;
           fmt_cbb ff;
 
-      | STMT_alt_type at -> 
+      | STMT_alt_type at ->
           fmt_obox ff;
           fmt ff "alt type (";
           fmt_lval ff at.alt_type_lval;
@@ -1241,7 +1242,7 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
           fmt_obr ff;
           Array.iter (fmt_type_arm ff) at.alt_type_arms;
           begin
-            match at.alt_type_else with 
+            match at.alt_type_else with
                 None -> ()
               | Some block ->
                   fmt ff "@\n";
@@ -1277,7 +1278,7 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
             fmt_atom ff at;
             fmt ff ";"
           end
-      | STMT_slice (dst, src, slice) -> 
+      | STMT_slice (dst, src, slice) ->
           fmt_lval ff dst;
           fmt ff " = ";
           fmt_lval ff src;
@@ -1285,11 +1286,11 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
           fmt_slice ff slice;
           fmt ff ";";
   end
-    
-and fmt_arm 
-    (ff:Format.formatter) 
+
+and fmt_arm
+    (ff:Format.formatter)
     (fmt_arm_case_expr : Format.formatter -> unit)
-    (block : block) 
+    (block : block)
     : unit =
   fmt ff "@\n";
   fmt_obox ff;
@@ -1299,11 +1300,11 @@ and fmt_arm
   fmt_obr ff;
   fmt_stmts ff block.node;
   fmt_cbb ff;
-  
+
 and fmt_tag_arm (ff:Format.formatter) (tag_arm:tag_arm) : unit =
   let (pat, block) = tag_arm.node in
     fmt_arm ff (fun ff -> fmt_pat ff pat) block;
-    
+
 and fmt_type_arm (ff:Format.formatter) (type_arm:type_arm) : unit =
   let ((ident, slot), block) = type_arm.node in
   let fmt_type_arm_case (ff:Format.formatter) =
@@ -1320,7 +1321,6 @@ and fmt_port_case (ff:Format.formatter) (port_case:port_case) : unit =
       PORT_CASE_send params -> STMT_send params
     | PORT_CASE_recv params -> STMT_recv params in
     fmt_stmt ff {node = stmt'; id = Node 0};
-    
 
 and fmt_pat (ff:Format.formatter) (pat:pat) : unit =
   match pat with
@@ -1351,9 +1351,9 @@ and fmt_slice (ff:Format.formatter) (slice:slice) : unit =
             fmt ff "@]";
     end;
     fmt ff "@])";
-    
 
-    
+
+
 
 and fmt_decl_param (ff:Format.formatter) (param:ty_param) : unit =
   let (ident, (i, e)) = param in
