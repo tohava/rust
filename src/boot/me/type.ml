@@ -11,6 +11,12 @@ type ltype =
   | LTYPE_poly of Ast.ty_param array * Ast.ty   (* "big lambda" *)
   | LTYPE_module of Ast.mod_items               (* type of a module *)
 
+(* A "type pattern" used for inference. *)
+type ty_pat =
+    TYPAT_wild                (* matches any type *)
+  | TYPAT_ty of Ast.ty        (* matches only the given type *)
+  | TYPAT_fn of Ast.ty array  (* matches a function with some arg types *)
+
 type fn_ctx = {
   fnctx_return_type: Ast.ty;
   fnctx_is_iter: bool;
@@ -231,7 +237,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
 
   (* Here the actual inference happens. *)
   let internal_check_slot
-      (infer:Ast.ty option)
+      (infer:ty_pat)
       (defn_id:Common.node_id)
       : Ast.ty =
     let slot =
@@ -243,10 +249,10 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
             "internal_check_slot: supplied defn wasn't a slot at all"
     in
     match infer, slot.Ast.slot_ty with
-        Some expected, Some actual ->
+        TYPAT_ty expected, Some actual ->
           demand expected actual;
           actual
-      | Some inferred, None ->
+      | TYPAT_ty inferred, None ->
           iflog cx
             (fun _ ->
                log cx "setting auto slot #%d = %a to type %a"
@@ -258,8 +264,11 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
           Hashtbl.replace cx.Semant.ctxt_all_defns defn_id
             (Semant.DEFN_slot new_slot);
           inferred
-      | None, Some actual -> actual
-      | None, None ->
+      | TYPAT_fn arg_tys, Some actual ->
+          ignore (demand_fn (Array.map (fun ty -> Some ty) arg_tys) actual);
+          actual
+      | TYPAT_wild, Some actual -> actual
+      | TYPAT_fn _, None | TYPAT_wild, None ->
           Common.err None "can't infer any type for this slot"
   in
 
@@ -281,7 +290,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
   in
 
   let rec internal_check_base_lval
-      (infer:Ast.ty option)
+      (infer:ty_pat)
       (nbi:Ast.name_base Common.identified)
       : ltype =
     let lval_id = nbi.Common.id in
@@ -302,7 +311,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
       (comp:Ast.lval_component)
       : ltype =
     let base_ity =
-      match internal_check_lval None base with
+      match internal_check_lval TYPAT_wild base with
           LTYPE_poly (_, ty) ->
             Common.err None "can't index the polymorphic type '%a'"
               Ast.sprintf_ty ty
@@ -459,7 +468,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
     in
     typecheck base_ity
 
-  and internal_check_lval (infer:Ast.ty option) (lval:Ast.lval) : ltype =
+  and internal_check_lval (infer:ty_pat) (lval:Ast.lval) : ltype =
     match lval with
         Ast.LVAL_base nbi -> internal_check_base_lval infer nbi
       | Ast.LVAL_ext (base, comp) -> internal_check_ext_lval base comp
@@ -473,8 +482,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
   and internal_check_outer_lval
       ~mut:(mut:Ast.mutability)
       ~deref:(deref:bool)
-      ~fn_args:(fn_args:(Ast.ty array) option)
-      (infer:Ast.ty option)
+      (infer:ty_pat)
       (lval:Ast.lval)
       : (Ast.ty * int) =
     let yield_ty ty =
@@ -482,34 +490,40 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
         (maybe_mutable mut ty, n_boxes)
     in
     match infer, internal_check_lval infer lval with
-      | None, LTYPE_mono ty -> yield_ty ty
-      | Some expected, LTYPE_mono actual ->
+      | TYPAT_wild, LTYPE_mono ty -> yield_ty ty
+      | TYPAT_ty expected, LTYPE_mono actual ->
           demand expected actual;
           yield_ty actual
-      | None, (LTYPE_poly _ as lty) ->
-          begin
-            match fn_args with
-                None ->
-                  Common.err None
-                    "can't auto-instantiate %a" sprintf_ltype lty
-              | Some args ->
-                  Common.err None "can't auto-instantiate %a on %d args"
-                    sprintf_ltype lty (Array.length args)
-          end
-      | Some _, (LTYPE_poly _) ->
+      | TYPAT_fn arg_tys, LTYPE_mono actual ->
+          ignore (demand_fn (Array.map (fun ty -> Some ty) arg_tys) actual);
+          yield_ty actual
+      | TYPAT_wild, (LTYPE_poly _ as lty) ->
+          Common.err
+            None
+            "not enough context to automatically instantiate the polymorphic \
+              type '%a'; supply type parameters explicitly"
+            sprintf_ltype lty
+      | TYPAT_ty expected, (LTYPE_poly _ as lty) ->
           (* FIXME: auto-instantiate *)
           Common.unimpl
             None
-            "sorry, automatic polymorphic instantiation isn't supported yet; \
-              please supply type parameters explicitly"
+            "sorry, automatic polymorphic instantiation of %a to %a isn't \
+            supported yet; please supply type parameters explicitly"
+            sprintf_ltype lty
+            Ast.sprintf_ty expected
+      | TYPAT_fn _, (LTYPE_poly _) ->
+          (* FIXME: auto-instantiate *)
+          Common.unimpl
+            None
+            "sorry, automatic polymorphic instantiation of function types \
+            isn't supported yet; please supply type parameters explicitly"
       | _, LTYPE_module _ ->
           Common.err None "can't refer to a module as a first-class value"
 
   and generic_check_lval
       ~mut:(mut:Ast.mutability)
       ~deref:(deref:bool)
-      ~fn_args:(fn_args:(Ast.ty array) option)
-      (infer:Ast.ty option)
+      (infer:ty_pat)
       (lval:Ast.lval)
       : Ast.ty =
     (* The lval we got is an impostor (it may contain unresolved TY_nameds).
@@ -524,11 +538,12 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
              (if mut = Ast.MUT_mutable then "mutable" else "immutable")
              (if deref then "true" else "false")
              (match infer with
-                  None -> "<none>"
-                | Some t -> Fmt.fmt_to_str Ast.fmt_ty t))
+                  TYPAT_wild -> "_"
+                | TYPAT_ty t -> Fmt.fmt_to_str Ast.fmt_ty t
+                | TYPAT_fn _ -> "<fn>" (* FIXME *)))
     in
     let (lval_ty, n_boxes) =
-      internal_check_outer_lval ~mut ~deref ~fn_args infer lval
+      internal_check_outer_lval ~mut:mut ~deref:deref infer lval
     in
     let _ =
       iflog cx
@@ -570,10 +585,9 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
   and check_lval
       ?mut:(mut=Ast.MUT_immutable)
       ?deref:(deref=false)
-      ?fn_args:(fn_args=None)
       (lval:Ast.lval)
       : Ast.ty =
-    generic_check_lval ~fn_args ~mut ~deref None lval
+    generic_check_lval ~mut:mut ~deref:deref TYPAT_wild lval
 
   and check_atom ?deref:(deref=false) (atom:Ast.atom) : Ast.ty =
     match atom with
@@ -582,7 +596,7 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
   in
 
   let infer_slot (ty:Ast.ty) (slot_id:Common.node_id) : unit =
-    ignore (internal_check_slot (Some ty) slot_id)
+    ignore (internal_check_slot (TYPAT_ty ty) slot_id)
   in
 
   let infer_lval
@@ -590,8 +604,8 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
       (ty:Ast.ty)
       (lval:Ast.lval)
       : unit =
-    ignore (generic_check_lval ~mut ~deref:false ~fn_args:None
-              (Some (Ast.TY_mutable ty)) lval)
+    ignore (generic_check_lval ?mut:mut ~deref:false
+              (TYPAT_ty (Ast.TY_mutable ty)) lval)
   in
 
   (*
@@ -646,7 +660,13 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
    * returns the return type. *)
   let check_fn (callee:Ast.lval) (args:Ast.atom array) : Ast.ty =
     let arg_tys = Array.map check_atom args in
-    let callee_ty = check_lval callee ~fn_args:(Some arg_tys) in
+    let callee_ty =
+      generic_check_lval
+        ~mut:Ast.MUT_immutable
+        ~deref:false
+        (TYPAT_fn arg_tys)
+        callee
+    in
     demand_fn (Array.map (fun ty -> Some ty) arg_tys) callee_ty
   in
 
@@ -1019,8 +1039,6 @@ let process_crate (cx:Semant.ctxt) (crate:Ast.crate) : unit =
     let visit_obj_drop_pre _ _ = push_fn_ctx Ast.TY_nil false in
     let visit_obj_drop_post _ _ = ignore (Stack.pop fn_ctx_stack) in
 
-    (* TODO: make sure you can't fall off the end of a function if it doesn't
-     * return void *)
     let visit_stmt_pre (stmt:Ast.stmt) : unit =
       try
         iflog cx

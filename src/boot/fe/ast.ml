@@ -1253,7 +1253,7 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
                   fmt_cbb ff;
           end;
           fmt_cbb ff;
-      | STMT_alt_port at -> 
+      | STMT_alt_port at ->
           fmt_obox ff;
           fmt ff "alt ";
           fmt_obr ff;
@@ -1272,7 +1272,7 @@ and fmt_stmt_body (ff:Format.formatter) (s:stmt) : unit =
                   fmt_cbb ff;
           end;
           fmt_cbb ff;
-      | STMT_note at -> 
+      | STMT_note at ->
           begin
             fmt ff "note ";
             fmt_atom ff at;
@@ -1311,7 +1311,7 @@ and fmt_type_arm (ff:Format.formatter) (type_arm:type_arm) : unit =
     fmt_slot ff slot; fmt ff " "; fmt_ident ff ident
   in
     fmt_arm ff fmt_type_arm_case block;
-      
+
 and fmt_port_arm (ff:Format.formatter) (port_arm:port_arm) : unit =
   let (port_case, block) = port_arm.node in
     fmt_arm ff (fun ff -> fmt_port_case ff port_case) block;

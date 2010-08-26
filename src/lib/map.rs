@@ -47,18 +47,17 @@ fn mk_hashmap[K, V](&hashfn[K] hasher, &eqfn[K] eqer) -> hashmap[K, V] {
   // fixed key.
 
   fn hashl[K](&hashfn[K] hasher, uint nbkts, &K key) -> uint {
-    ret (hasher(key) >>> (sys.rustrt.size_of[uint]() * 8u / 2u))
-      % nbkts;
+    ret (hasher(key) >>> (sys.rustrt.size_of[uint]() * 8u / 2u));
   }
 
   fn hashr[K](&hashfn[K] hasher, uint nbkts, &K key) -> uint {
     ret ((((~ 0u) >>> (sys.rustrt.size_of[uint]() * 8u / 2u))
-          & hasher(key)) * 2u + 1u)
-      % nbkts;
+          & hasher(key)) * 2u + 1u);
   }
 
   fn hash[K](&hashfn[K] hasher, uint nbkts, &K key, uint i) -> uint {
-    ret hashl[K](hasher, nbkts, key) + i * hashr[K](hasher, nbkts, key);
+    ret (hashl[K](hasher, nbkts, key)
+         + i * hashr[K](hasher, nbkts, key)) % nbkts;
   }
 
   /**
@@ -75,7 +74,7 @@ fn mk_hashmap[K, V](&hashfn[K] hasher, &eqfn[K] eqer) -> hashmap[K, V] {
   {
     let uint i = 0u;
     while (i < nbkts) {
-      let uint j = (hash[K](hasher, nbkts, key, i));
+      let uint j = hash[K](hasher, nbkts, key, i);
       alt (bkts.(j)) {
         case (some[K, V](k, _)) {
           if (eqer(key, k)) {
@@ -146,10 +145,12 @@ fn mk_hashmap[K, V](&hashfn[K] hasher, &eqfn[K] eqer) -> hashmap[K, V] {
       let util.rational load = rec(num=(nelts + 1u) as int, den=nbkts as int);
       if (!util.rational_leq(load, lf)) {
         let uint nnewbkts = _uint.next_power_of_two(nbkts + 1u);
-
         let vec[mutable bucket[K, V]] newbkts = make_buckets[K, V](nnewbkts);
         rehash[K, V](hasher, eqer, bkts, nbkts, newbkts, nnewbkts);
+        bkts = newbkts;
+        nbkts = nnewbkts;
       }
+
       if (insert_common[K, V](hasher, eqer, bkts, nbkts, key, val)) {
         nelts += 1u;
         ret true;
