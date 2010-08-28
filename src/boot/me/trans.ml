@@ -2933,12 +2933,18 @@ let trans_visitor
       : unit =
     drop_ty (get_ty_params_of_current_frame()) cell ty None
 
+  (* Returns a mark for a jmp that must be patched to the continuation of
+   * the null case (i.e. fall-through means not null).
+   *)
   and null_check (cell:Il.cell) : quad_idx =
     emit (Il.cmp (Il.Cell cell) zero);
     let j = mark() in
       emit (Il.jmp Il.JE Il.CodeNone);
       j
 
+  (* Returns a mark for a jmp that must be patched to the continuation of
+   * the non-zero refcount case (i.e. fall-through means zero refcount).
+   *)
   and drop_refcount_and_cmp (boxed:Il.cell) : quad_idx =
     iflog (fun _ -> annotate "drop refcount and maybe free");
     let rc = box_rc_cell boxed in
@@ -3258,6 +3264,7 @@ let trans_visitor
                   get_element_ptr dst Abi.binding_field_bound_data
                 in
                   mov dst_item (Il.Cell src_item);
+                  mov dst_binding zero;
                   let null_jmp = null_check src_binding in
                     (* Copy if we have a src binding. *)
                     (* FIXME (issue #58): this is completely wrong, call
@@ -4131,9 +4138,16 @@ let trans_visitor
 
     let trans_arm arm : quad_idx =
       let (pat, block) = arm.node in
-        (* Translates the pattern and returns the addresses of the branch
-         * instructions, which are taken if the match fails. *)
-      let rec trans_pat pat src_cell src_ty =
+
+      (* Translates the pattern and returns the addresses of the branch
+       * instructions that are taken if the match fails.
+       *)
+      let rec trans_pat
+          (pat:Ast.pat)
+          (src_cell:Il.cell)
+          (src_ty:Ast.ty)
+          : quad_idx list =
+
         match pat with
             Ast.PAT_lit lit ->
               trans_compare_simple Il.JNE (trans_lit lit) (Il.Cell src_cell)
@@ -4174,8 +4188,10 @@ let trans_visitor
                   trans_pat elem_pat elem_cell elem_ty
               in
 
-              let elem_jumps = Array.mapi trans_elem_pat pats in
-                next_jumps @ (List.concat (Array.to_list elem_jumps))
+              let elem_jumps =
+                List.concat (Array.to_list (Array.mapi trans_elem_pat pats))
+              in
+                next_jumps @ elem_jumps
 
           | Ast.PAT_slot (dst, _) ->
               let dst_slot = get_slot cx dst.id in
@@ -4184,9 +4200,9 @@ let trans_visitor
                   (get_ty_params_of_current_frame())
                   CLONE_none dst_cell dst_slot
                   src_cell src_ty;
-                []                (* irrefutable *)
+                []                 (* irrefutable *)
 
-          | Ast.PAT_wild -> []    (* irrefutable *)
+          | Ast.PAT_wild -> []     (* irrefutable *)
       in
 
       let (lval_cell, lval_ty) = trans_lval at.Ast.alt_tag_lval in

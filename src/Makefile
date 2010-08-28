@@ -59,6 +59,7 @@ ifeq ($(CFG_OSTYPE), Darwin)
   # "on an i386" when the whole userspace is 64-bit and the compiler
   # emits 64-bit binaries by default. So we just force -m32 here. Smarter
   # approaches welcome!
+  CFG_NATIVE := 1
   CFG_GCC_CFLAGS += -m32
   CFG_GCC_LINK_FLAGS += -m32
   DSYMUTIL := dsymutil
@@ -410,7 +411,6 @@ TEST_XFAILS_X86 :=  $(TASK_XFAILS) \
                     test/run-pass/generic-recursive-tag.rs \
                     test/run-pass/iter-ret.rs \
                     test/run-pass/lib-io.rs \
-                    test/run-pass/lib-map.rs \
                     test/run-pass/mlist-cycle.rs \
                     test/run-pass/obj-as.rs \
                     test/run-pass/task-comm.rs \
@@ -426,12 +426,14 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                     $(addprefix test/run-pass/, \
                       arith-1.rs \
                       acyclic-unwind.rs \
+                      alt-pattern-drop.rs \
                       alt-pattern-simple.rs \
                       alt-tag.rs \
                       append-units.rs \
                       argv.rs \
                       autoderef-full-lval.rs \
                       autoderef-objfn.rs \
+                      auto-instantiate.rs \
                       basic.rs \
                       basic-1.rs \
                       basic-2.rs \
@@ -491,6 +493,7 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       lib-rand.rs \
                       lib-str.rs \
                       lib-task.rs \
+                      lib-uint.rs \
                       lib-vec.rs \
                       lib-vec-str-conversions.rs \
                       linear-for-loop.rs \
@@ -509,6 +512,7 @@ TEST_XFAILS_LLVM := $(TASK_XFAILS) \
                       obj-with-vec.rs \
                       operator-associativity.rs \
                       output-slot-variants.rs \
+                      over-constrained-vregs.rs \
                       pred.rs \
                       preempt.rs \
                       readalias.rs \

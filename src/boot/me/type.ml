@@ -153,7 +153,12 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
         Ast.TY_rec ty_rec -> ty_rec
       | ty -> type_error "record" ty
   in
-  let demand_fn (arg_tys:Ast.ty option array) (actual:Ast.ty) : Ast.ty =
+  let demand_fn
+      ?param_handler:(param_handler=
+        fun a idx effect -> demand a (Ast.TY_param (idx, effect)))
+      (arg_tys:Ast.ty option array)
+      (actual:Ast.ty)
+      : Ast.ty =
     let expected = lazy begin
       Format.fprintf Format.str_formatter "fn(";
       let print_arg_ty i arg_ty_opt =
@@ -173,7 +178,11 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
             type_error (Lazy.force expected) ty;
           let in_slot_tys = Array.map get_slot_ty in_slots in
           let maybe_demand a_opt b =
-            match a_opt with None -> () | Some a -> demand a b
+            match a_opt, b with
+                None, _ -> ()
+              | Some a, Ast.TY_param (idx, effect) ->
+                  param_handler a idx effect
+              | Some a, _ -> demand a b
           in
           Common.arr_iter2 maybe_demand arg_tys in_slot_tys;
           get_slot_ty (ty_sig.Ast.sig_output_slot)
@@ -490,13 +499,40 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
         (maybe_mutable mut ty, n_boxes)
     in
     match infer, internal_check_lval infer lval with
-      | TYPAT_wild, LTYPE_mono ty -> yield_ty ty
+        TYPAT_wild, LTYPE_mono ty -> yield_ty ty
       | TYPAT_ty expected, LTYPE_mono actual ->
           demand expected actual;
           yield_ty actual
       | TYPAT_fn arg_tys, LTYPE_mono actual ->
           ignore (demand_fn (Array.map (fun ty -> Some ty) arg_tys) actual);
           yield_ty actual
+      | TYPAT_fn arg_tys, (LTYPE_poly (ty_params, ty) as lty) ->
+          (* Perform automatic instantiation of polymorphic types. *)
+          let ty = fundamental_ty ty in
+          let substs = Array.make (Array.length ty_params) None in
+          let param_handler substituted_ty idx _ =
+            match substs.(idx) with
+            | None -> substs.(idx) <- Some substituted_ty
+            | Some substituted_ty' -> demand substituted_ty substituted_ty'
+          in
+          let arg_ty_opts = Array.map (fun ty -> Some ty) arg_tys in
+          ignore (demand_fn ~param_handler:param_handler arg_ty_opts ty);
+          let get_subst subst_opt =
+            match subst_opt with
+                Some subst -> subst
+              | None ->
+                  Common.bug ()
+                    "internal_check_outer_lval: subst not found"
+          in
+          let substs = Array.map get_subst substs in
+          begin
+            match beta_reduce (Semant.lval_base_id lval) lty substs with
+                LTYPE_mono ty -> yield_ty ty
+              | _ ->
+                  Common.bug ()
+                    "internal_check_outer_lval: beta reduction didn't yield \
+                      a monotype"
+          end
       | TYPAT_wild, (LTYPE_poly _ as lty) ->
           Common.err
             None
@@ -504,19 +540,12 @@ let check_stmt (cx:Semant.ctxt) : (fn_ctx -> Ast.stmt -> unit) =
               type '%a'; supply type parameters explicitly"
             sprintf_ltype lty
       | TYPAT_ty expected, (LTYPE_poly _ as lty) ->
-          (* FIXME: auto-instantiate *)
-          Common.unimpl
+          Common.err
             None
-            "sorry, automatic polymorphic instantiation of %a to %a isn't \
-            supported yet; please supply type parameters explicitly"
+            "not enough context to automatically instantiate '%a' to '%a'; \
+            please supply type parameters explicitly"
             sprintf_ltype lty
             Ast.sprintf_ty expected
-      | TYPAT_fn _, (LTYPE_poly _) ->
-          (* FIXME: auto-instantiate *)
-          Common.unimpl
-            None
-            "sorry, automatic polymorphic instantiation of function types \
-            isn't supported yet; please supply type parameters explicitly"
       | _, LTYPE_module _ ->
           Common.err None "can't refer to a module as a first-class value"
 
