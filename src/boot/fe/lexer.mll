@@ -112,6 +112,8 @@
                 ("let", LET);
 
                 ("log", LOG);
+                ("break", BREAK);
+                ("cont", CONT);
                 ("spawn", SPAWN);
                 ("thread", THREAD);
                 ("yield", YIELD);
